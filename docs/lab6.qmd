@@ -1,0 +1,58 @@
+---
+title: "lab6"
+name: "Josh Ray"
+format: html
+editor: visual
+---
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+
+if(!dir.exists("data")) dir.create("data")
+
+download.file(
+  'https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf', 
+  'data/camels_attributes_v2.0.pdf'
+)
+
+root <- 'https://gdex.ucar.edu/dataset/camels/file'
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+remote_files <- glue('{root}/camels_{types}.txt')
+local_files  <- glue('data/camels_{types}.txt')
+
+purrr::walk2(remote_files, local_files, download.file, quiet = TRUE)
+
+data_list <- purrr::map(local_files, readr::read_delim, delim = "\t", show_col_types = FALSE)
+
+library(dplyr)
+library(purrr)
+camels <- purrr::reduce(data_list, dplyr::full_join, by = "gauge_id")
+```
+
+
+
+
+
+
+
+```{r}
+map_aridity <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = aridity)) +
+  scale_color_gradient(low = "yellow", high = "red") +
+  ggthemes::theme_map() +
+  labs(title = "CAMELS Sites Colored by Aridity")
+
+map_pmean <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = p_mean)) +
+  scale_color_gradient(low = "lightgreen", high = "darkgreen") +
+  ggthemes::theme_map() +
+  labs(title = "CAMELS Sites Colored by Mean Precipitation")
+
+map_aridity + map_pmean
+```
