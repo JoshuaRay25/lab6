@@ -1,0 +1,500 @@
+csu-ess-lab6
+library(tidyverse)
+
+── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+✔ dplyr     1.1.4     ✔ readr     2.1.5
+✔ forcats   1.0.0     ✔ stringr   1.5.1
+✔ ggplot2   3.5.1     ✔ tibble    3.2.1
+✔ lubridate 1.9.4     ✔ tidyr     1.3.1
+✔ purrr     1.0.4     
+── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+library(tidymodels)
+
+── Attaching packages ────────────────────────────────────── tidymodels 1.3.0 ──
+✔ broom        1.0.7     ✔ rsample      1.2.1
+✔ dials        1.4.0     ✔ tune         1.3.0
+✔ infer        1.0.7     ✔ workflows    1.2.0
+✔ modeldata    1.4.0     ✔ workflowsets 1.1.0
+✔ parsnip      1.3.1     ✔ yardstick    1.3.2
+✔ recipes      1.1.1     
+── Conflicts ───────────────────────────────────────── tidymodels_conflicts() ──
+✖ scales::discard() masks purrr::discard()
+✖ dplyr::filter()   masks stats::filter()
+✖ recipes::fixed()  masks stringr::fixed()
+✖ dplyr::lag()      masks stats::lag()
+✖ yardstick::spec() masks readr::spec()
+✖ recipes::step()   masks stats::step()
+library(powerjoin)
+library(glue)
+library(vip)
+
+
+Attaching package: 'vip'
+
+The following object is masked from 'package:utils':
+
+    vi
+library(baguette)
+library(patchwork)
+
+if(!dir.exists("data")) dir.create("data")
+
+download.file(
+  'https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf', 
+  'data/camels_attributes_v2.0.pdf'
+)
+
+root <- 'https://gdex.ucar.edu/dataset/camels/file'
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+remote_files <- glue('{root}/camels_{types}.txt')
+local_files  <- glue('data/camels_{types}.txt')
+
+purrr::walk2(remote_files, local_files, download.file, quiet = TRUE)
+
+data_list <- purrr::map(local_files, readr::read_csv2, show_col_types = FALSE)
+
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+ℹ Using "','" as decimal and "'.'" as grouping mark. Use `read_delim()` for more control.
+data_list <- purrr::map(data_list, ~ dplyr::rename_with(.x, stringr::str_trim))
+
+library(dplyr)
+library(purrr)
+
+camels <- powerjoin::power_full_join(data_list, by = "gauge_id")
+
+#Question 1 answer: zero_q_freq represents the number of days where the flow is 0. “frequency of days with Q = 0 mm/day”
+
+#Question 2 below:
+
+camels <- camels %>%
+  mutate(
+    aridity = as.numeric(aridity),
+    p_mean = as.numeric(p_mean)
+  )
+
+map_aridity <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = aridity)) +
+  scale_color_gradient(low = "yellow", high = "red") +
+  ggthemes::theme_map() +
+  labs(title = "CAMELS Sites Colored by Aridity")
+
+map_pmean <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = p_mean)) +
+  scale_color_gradient(low = "lightgreen", high = "darkgreen") +
+  ggthemes::theme_map() +
+  labs(title = "CAMELS Sites Colored by Mean Precipitation")
+
+map_aridity + map_pmean
+
+
+
+camels <- camels %>%
+  mutate(
+    aridity = as.numeric(aridity),
+    p_mean  = as.numeric(p_mean),
+    q_mean  = as.numeric(q_mean)
+  )
+cor_data <- camels %>% 
+  select(aridity, p_mean, q_mean) %>% 
+  drop_na() %>% 
+  cor()
+print(cor_data)
+
+           aridity     p_mean     q_mean
+aridity  1.0000000 -0.7550090 -0.5817771
+p_mean  -0.7550090  1.0000000  0.8865757
+q_mean  -0.5817771  0.8865757  1.0000000
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  scale_color_viridis_c() +
+  theme_linedraw() +
+  theme(legend.position = "bottom") +
+  labs(title = "Aridity vs Rainfall vs Runoff",
+       x = "Aridity",
+       y = "Rainfall (p_mean)",
+       color = "Mean Flow (q_mean)")
+
+`geom_smooth()` using formula = 'y ~ x'
+
+
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  scale_color_viridis_c(trans = "log") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom",
+        legend.key.width = unit(2.5, "cm"),
+        legend.key.height = unit(0.5, "cm")) +
+  labs(title = "Log-Log Transform: Aridity vs Rainfall vs Runoff",
+       x = "Log(Aridity)",
+       y = "Log(Rainfall)",
+       color = "Log(Mean Flow)")
+
+`geom_smooth()` using formula = 'y ~ x'
+
+
+set.seed(123)
+camels <- camels %>% mutate(logQmean = log(q_mean))
+
+camels_split <- initial_split(camels, prop = 0.8)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_cv <- vfold_cv(camels_train, v = 10)
+
+rec <- recipe(logQmean ~ aridity + p_mean, data = camels_train) %>%
+  step_log(all_predictors()) %>%            
+  step_interact(terms = ~ aridity:p_mean) %>% 
+  step_naomit(all_predictors(), all_outcomes())
+
+baked_data <- prep(rec, training = camels_train) %>% bake(new_data = NULL)
+
+lm_base <- lm(logQmean ~ aridity * p_mean, data = baked_data)
+summary(lm_base)
+
+
+Call:
+lm(formula = logQmean ~ aridity * p_mean, data = baked_data)
+
+Residuals:
+     Min       1Q   Median       3Q      Max 
+-2.91162 -0.21601 -0.00716  0.21230  2.85706 
+
+Coefficients:
+               Estimate Std. Error t value Pr(>|t|)    
+(Intercept)    -1.77586    0.16365 -10.852  < 2e-16 ***
+aridity        -0.88397    0.16145  -5.475 6.75e-08 ***
+p_mean          1.48438    0.15511   9.570  < 2e-16 ***
+aridity:p_mean  0.10484    0.07198   1.457    0.146    
+---
+Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+Residual standard error: 0.5696 on 531 degrees of freedom
+Multiple R-squared:  0.7697,    Adjusted R-squared:  0.7684 
+F-statistic: 591.6 on 3 and 531 DF,  p-value: < 2.2e-16
+test_data <- bake(prep(rec, training = camels_train), new_data = camels_test)
+test_data$lm_pred <- predict(lm_base, newdata = test_data)
+
+ggplot(test_data, aes(x = logQmean, y = lm_pred)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1) +
+  geom_abline(color = "red", linewidth = 1) +
+  labs(title = "Linear Model Using Base R",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow") +
+  theme_linedraw()
+
+`geom_smooth()` using formula = 'y ~ x'
+
+
+lm_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+lm_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(lm_model) %>%
+  fit(data = camels_train)
+
+print(summary(extract_fit_engine(lm_wf))$coefficients)
+
+                   Estimate Std. Error    t value     Pr(>|t|)
+(Intercept)      -1.7758557 0.16364755 -10.851710 6.463654e-25
+aridity          -0.8839738 0.16144589  -5.475357 6.745512e-08
+p_mean            1.4843771 0.15511117   9.569762 4.022500e-20
+aridity_x_p_mean  0.1048449 0.07198145   1.456555 1.458304e-01
+lm_data <- augment(lm_wf, new_data = camels_test)
+head(lm_data)
+
+# A tibble: 6 × 61
+  .pred .resid gauge_id p_mean pet_mean p_seasonality      frac_snow     aridity
+  <dbl>  <dbl> <chr>     <dbl>    <dbl> <chr>              <chr>           <dbl>
+1 0.269  0.261 01013500   3.13  1.97e14 0.187940258706929  0.3134403571…   0.631
+2 0.343  0.256 01030500   3.27  2.04e14 0.0473581892739792 0.2770184029…   0.624
+3 0.500  0.101 01057000   3.57  2.13e14 0.07913684920672   0.2511576727…   0.597
+4 0.451  0.280 01134500   3.47  2.09e14 0.228672352531939  0.2805820892…   0.603
+5 0.332  0.262 01139800   3.30  2.13e14 0.225579083207184  0.2623289731…   0.644
+6 0.663  0.142 01169000   3.92  2.25e14 0.0638282505914665 0.2389726058…   0.574
+# ℹ 53 more variables: high_prec_freq <dbl>, high_prec_dur <dbl>,
+#   high_prec_timing <chr>, low_prec_freq <dbl>, low_prec_dur <dbl>,
+#   low_prec_timing <chr>, geol_1st_class <chr>, glim_1st_class_frac <chr>,
+#   geol_2nd_class <chr>, glim_2nd_class_frac <chr>,
+#   carbonate_rocks_frac <chr>, geol_porostiy <chr>, geol_permeability <dbl>,
+#   soil_depth_pelletier <chr>, soil_depth_statsgo <chr>, soil_porosity <chr>,
+#   soil_conductivity <chr>, max_water_content <chr>, sand_frac <dbl>, …
+lm_metrics <- metrics(lm_data, truth = logQmean, estimate = .pred)
+print(lm_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.583
+2 rsq     standard       0.742
+3 mae     standard       0.390
+ggplot(lm_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline(linetype = "dashed") +
+  theme_linedraw() +
+  labs(title = "Linear Model (Workflow): Observed vs Predicted",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity")
+
+
+
+rf_model <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+rf_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(rf_model) %>%
+  fit(data = camels_train)
+
+rf_data <- augment(rf_wf, new_data = camels_test)
+head(rf_data)
+
+# A tibble: 6 × 60
+  .pred gauge_id p_mean pet_mean p_seasonality  frac_snow aridity high_prec_freq
+  <dbl> <chr>     <dbl>    <dbl> <chr>          <chr>       <dbl>          <dbl>
+1 0.583 01013500   3.13  1.97e14 0.18794025870… 0.313440…   0.631           1295
+2 0.649 01030500   3.27  2.04e14 0.04735818927… 0.277018…   0.624           1715
+3 0.734 01057000   3.57  2.13e14 0.07913684920… 0.251157…   0.597           2035
+4 0.681 01134500   3.47  2.09e14 0.22867235253… 0.280582…   0.603           1585
+5 0.603 01139800   3.30  2.13e14 0.22557908320… 0.262328…   0.644           1945
+6 0.787 01169000   3.92  2.25e14 0.06382825059… 0.238972…   0.574            196
+# ℹ 52 more variables: high_prec_dur <dbl>, high_prec_timing <chr>,
+#   low_prec_freq <dbl>, low_prec_dur <dbl>, low_prec_timing <chr>,
+#   geol_1st_class <chr>, glim_1st_class_frac <chr>, geol_2nd_class <chr>,
+#   glim_2nd_class_frac <chr>, carbonate_rocks_frac <chr>, geol_porostiy <chr>,
+#   geol_permeability <dbl>, soil_depth_pelletier <chr>,
+#   soil_depth_statsgo <chr>, soil_porosity <chr>, soil_conductivity <chr>,
+#   max_water_content <chr>, sand_frac <dbl>, silt_frac <dbl>, …
+rf_metrics <- metrics(rf_data, truth = logQmean, estimate = .pred)
+print(rf_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.587
+2 rsq     standard       0.741
+3 mae     standard       0.363
+ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline(linetype = "dashed") +
+  theme_linedraw() +
+  labs(title = "Random Forest Model: Observed vs Predicted",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity")
+
+
+
+#Question 3 below
+
+library(xgboost)
+
+
+Attaching package: 'xgboost'
+The following object is masked from 'package:dplyr':
+
+    slice
+xgb_model <- boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+nn_model <- bag_mlp() %>%
+  set_engine("nnet") %>%
+  set_mode("regression")
+
+xgb_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(xgb_model) %>%
+  fit(data = camels_train)
+
+nn_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(nn_model) %>%
+  fit(data = camels_train)
+
+xgb_data <- augment(xgb_wf, new_data = camels_test)
+nn_data  <- augment(nn_wf, new_data = camels_test)
+
+xgb_metrics <- metrics(xgb_data, truth = logQmean, estimate = .pred)
+nn_metrics  <- metrics(nn_data, truth = logQmean, estimate = .pred)
+
+print(xgb_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.631
+2 rsq     standard       0.702
+3 mae     standard       0.397
+print(nn_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.545
+2 rsq     standard       0.773
+3 mae     standard       0.338
+wf_set <- workflow_set(
+  preproc = list(rec = rec),
+  models = list(
+    lm  = lm_model,
+    rf  = rf_model,
+    xgb = xgb_model,
+    nn  = nn_model
+  )
+)
+
+wf_set <- wf_set %>% 
+  workflow_map("fit_resamples", resamples = camels_cv)
+
+autoplot(wf_set)
+
+
+
+ranked_results <- rank_results(wf_set, rank_metric = "rsq", select_best = TRUE)
+print(ranked_results)
+
+# A tibble: 8 × 9
+  wflow_id .config          .metric  mean std_err     n preprocessor model  rank
+  <chr>    <chr>            <chr>   <dbl>   <dbl> <int> <chr>        <chr> <int>
+1 rec_nn   Preprocessor1_M… rmse    0.551  0.0255    10 recipe       bag_…     1
+2 rec_nn   Preprocessor1_M… rsq     0.784  0.0233    10 recipe       bag_…     1
+3 rec_rf   Preprocessor1_M… rmse    0.562  0.0252    10 recipe       rand…     2
+4 rec_rf   Preprocessor1_M… rsq     0.772  0.0256    10 recipe       rand…     2
+5 rec_lm   Preprocessor1_M… rmse    0.569  0.0260    10 recipe       line…     3
+6 rec_lm   Preprocessor1_M… rsq     0.770  0.0223    10 recipe       line…     3
+7 rec_xgb  Preprocessor1_M… rmse    0.600  0.0289    10 recipe       boos…     4
+8 rec_xgb  Preprocessor1_M… rsq     0.745  0.0268    10 recipe       boos…     4
+best_wf <- rf_wf
+
+best_test_data <- augment(best_wf, new_data = camels_test)
+best_metrics <- metrics(best_test_data, truth = logQmean, estimate = .pred)
+print(best_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.587
+2 rsq     standard       0.741
+3 mae     standard       0.363
+ggplot(best_test_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline(linetype = "dashed") +
+  theme_linedraw() +
+  labs(title = "Best Model (Random Forest): Observed vs Predicted (Test Data)",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity")
+
+
+
+#Answer to Question 3: I would move forward with the random forest model because I evaluated it as the most accurate.
+
+#Question 4
+
+camels_split <- initial_split(camels, prop = 0.75)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_cv <- vfold_cv(camels_train, v = 10)
+
+rec <- recipe(logQmean ~ aridity + p_mean + slope_mean + elev_mean, data = camels_train) %>%
+  step_mutate(across(c(aridity, p_mean, slope_mean, elev_mean), as.numeric)) %>%
+  step_normalize(all_predictors()) %>%
+  step_interact(terms = ~ aridity:p_mean) %>%
+  step_poly(all_predictors(), degree = 2) %>%
+  step_naomit(all_predictors(), all_outcomes())
+
+lm_model <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+rf_model <- rand_forest(mtry = 2, trees = 500, min_n = 5) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+xgb_model <- boost_tree(trees = 1000, learn_rate = 0.05, tree_depth = 6) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+wf_set <- workflow_set(
+  preproc = list(basic = rec),
+  models = list(
+    lm  = lm_model,
+    rf  = rf_model,
+    xgb = xgb_model
+  )
+)
+
+wf_set_res <- wf_set %>% 
+  workflow_map("fit_resamples", resamples = camels_cv, verbose = TRUE)
+
+i 1 of 3 resampling: basic_lm
+✔ 1 of 3 resampling: basic_lm (420ms)
+i 2 of 3 resampling: basic_rf
+✔ 2 of 3 resampling: basic_rf (1.7s)
+i 3 of 3 resampling: basic_xgb
+✔ 3 of 3 resampling: basic_xgb (6s)
+autoplot(wf_set_res)
+
+
+
+ranked_results <- rank_results(wf_set_res, rank_metric = "rsq", select_best = TRUE)
+print(ranked_results)
+
+# A tibble: 6 × 9
+  wflow_id  .config         .metric  mean std_err     n preprocessor model  rank
+  <chr>     <chr>           <chr>   <dbl>   <dbl> <int> <chr>        <chr> <int>
+1 basic_rf  Preprocessor1_… rmse    0.484  0.0351    10 recipe       rand…     1
+2 basic_rf  Preprocessor1_… rsq     0.833  0.0216    10 recipe       rand…     1
+3 basic_lm  Preprocessor1_… rmse    0.478  0.0317    10 recipe       line…     2
+4 basic_lm  Preprocessor1_… rsq     0.827  0.0205    10 recipe       line…     2
+5 basic_xgb Preprocessor1_… rmse    0.506  0.0392    10 recipe       boos…     3
+6 basic_xgb Preprocessor1_… rsq     0.808  0.0267    10 recipe       boos…     3
+#Extraction and evaluation
+
+best_wf_id <- ranked_results$wflow_id[1]
+best_wf <- extract_workflow(wf_set_res, id = best_wf_id)
+
+final_wf <- best_wf %>% fit(data = camels_train)
+
+test_results <- augment(final_wf, new_data = camels_test)
+
+test_metrics <- metrics(test_results, truth = logQmean, estimate = .pred)
+print(test_metrics)
+
+# A tibble: 3 × 3
+  .metric .estimator .estimate
+  <chr>   <chr>          <dbl>
+1 rmse    standard       0.396
+2 rsq     standard       0.900
+3 mae     standard       0.271
+ggplot(test_results, aes(x = logQmean, y = .pred, color = aridity)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Best Model: Observed vs Predicted Log Mean Flow",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity") +
+  theme_minimal()
+
