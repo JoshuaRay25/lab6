@@ -1,0 +1,193 @@
+---
+title: "Lab 8"
+format:
+  html:
+    self-contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE,
+                      fig.width=7, fig.height=5)
+library(tidyverse)
+library(purrr)
+library(readr)
+library(powerjoin)
+library(rsample)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(tune)
+library(yardstick)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(patchwork)
+```
+
+
+
+# 1. Data Import & Cleaning
+
+
+
+```{r}
+txt_files <- list.files("data", pattern="\\.txt$", full.names=TRUE)
+camels_raw <- map(txt_files, ~ read_delim(.x, delim=";", show_col_types=FALSE)) %>%
+  reduce(power_full_join, by="gauge_id")
+
+camels <- camels_raw %>% filter(!is.na(q_mean))
+glimpse(camels)
+```
+
+
+
+# 2. Train/Test Split
+
+
+
+```{r}
+set.seed(123)
+split_obj  <- initial_split(camels, prop=0.8, strata=q_mean)
+train_data <- training(split_obj)
+test_data  <- testing(split_obj)
+```
+
+
+
+# 3. Preprocessing Recipe
+
+
+
+```{r}
+camels_recipe <- recipe(q_mean ~ ., data=train_data) %>%
+  update_role(gauge_lat, gauge_lon, new_role="ID") %>%
+  step_rm(gauge_lat, gauge_lon) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_other(all_nominal_predictors(), threshold=0.01) %>%
+  step_dummy(all_nominal_predictors(), one_hot=TRUE) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+```
+
+
+
+# 4. Cross-Validation Folds
+
+
+
+```{r}
+cv_folds <- vfold_cv(train_data, v=10, strata=q_mean)
+```
+
+
+
+# 5. Baseline XGBoost (no tuning)
+
+
+
+```{r}
+xgb_spec_def <- boost_tree(trees=1000) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+xgb_wf_def <- workflow() %>%
+  add_recipe(camels_recipe) %>%
+  add_model(xgb_spec_def)
+
+xgb_res_def <- fit_resamples(
+  xgb_wf_def,
+  resamples = cv_folds,
+  metrics   = metric_set(rmse, mae, rsq),
+  control   = control_resamples(save_pred=TRUE)
+)
+
+collect_metrics(xgb_res_def)
+```
+
+
+
+# 6. Hyperparameter Tuning with tune_grid()
+
+
+
+```{r}
+xgb_spec_tune <- boost_tree(
+  trees      = 1000,
+  learn_rate = tune(),
+  tree_depth = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+xgb_wf_tune <- workflow() %>%
+  add_recipe(camels_recipe) %>%
+  add_model(xgb_spec_tune)
+
+library(dials)
+param_set <- extract_parameter_set_dials(xgb_wf_tune)
+my_grid   <- grid_space_filling(param_set, size=25)
+
+tune_res <- tune_grid(
+  xgb_wf_tune,
+  resamples = cv_folds,
+  grid      = my_grid,
+  metrics   = metric_set(rmse, mae, rsq),
+  control   = control_grid(save_pred = TRUE)
+)
+
+autoplot(tune_res)
+
+hp_best <- select_best(tune_res, "mae")
+hp_best
+```
+
+
+
+# 7. Final Model & Last-Fit
+
+
+
+```{r}
+final_wf  <- finalize_workflow(xgb_wf_tune, hp_best)
+final_fit <- last_fit(final_wf, split_obj)
+
+collect_metrics(final_fit)
+
+preds <- collect_predictions(final_fit)
+
+ggplot(preds, aes(.pred, q_mean)) +
+  geom_point(alpha=0.5) +
+  geom_abline(linetype="dashed") +
+  geom_smooth(method="lm", se=FALSE) +
+  labs(title="Predicted vs Actual q_mean", x="Predicted", y="Actual") +
+  theme_minimal()
+```
+
+
+
+# 8. Spatial Map of Predictions & Residuals
+
+
+
+```{r}
+full_mod   <- fit(final_wf, camels)
+full_preds <- augment(full_mod, camels) %>% mutate(residual = .pred - q_mean)
+
+usa_states <- ne_states(country="United States of America", returnclass="sf")
+
+p1 <- ggplot(usa_states) +
+  geom_sf(fill="gray90", color="white") +
+  geom_point(data=full_preds, aes(gauge_lon, gauge_lat, color=.pred), size=1, alpha=0.7) +
+  scale_color_viridis_c(name="q_mean_pred") +
+  labs(title="Predicted q_mean across CONUS") + theme_minimal()
+
+p2 <- ggplot(usa_states) +
+  geom_sf(fill="gray90", color="white") +
+  geom_point(data=full_preds, aes(gauge_lon, gauge_lat, color=residual), size=1, alpha=0.7) +
+  scale_color_gradient2(name="Residual") +
+  labs(title="Residuals (Predicted – Actual)") + theme_minimal()
+
+p1 + p2
+```
+
